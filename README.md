@@ -1,10 +1,6 @@
 <!-- Copyright (C) 2026 Nucora Linux By : Efe Enes -->
 <!-- License: GNU General Public License v3.0 -->
 
-<p align="center">
-  <img src="assets/banner.png" alt="nux-maker banner" width="100%">
-</p>
-
 <h1 align="center">nux-maker</h1>
 <p align="center">
   Nucora Linux Nux Package Manager's Repo Builder App
