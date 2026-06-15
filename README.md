@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Efe Enes
+# License: GNU General Public License v3.0
+# https://www.gnu.org/licenses/gpl-3.0.html
 # nux-maker
 <p align="center">
 </p>
