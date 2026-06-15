@@ -2,9 +2,9 @@
 <p align="center">
 </p>
 
-<h1 align="center">nux</h1>
+<h1 align="center">nux-maker</h1>
 <p align="center">
-  Modern package manager for Nucora Linux
+  Nucora Linux Nux Package Manager's Repo Builder App 
 </p>
 
 <p align="center">
