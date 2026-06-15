@@ -1,6 +1,5 @@
 # Copyright (C) 2026 Nucora Linux By : Efe Enes
 # License: GNU General Public License v3.0
-# nux-maker
 <p align="center">
 </p>
 
