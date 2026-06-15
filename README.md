@@ -100,5 +100,5 @@ No separate script needed — nux-maker includes a full repository index generat
 ```bash
 git clone https://github.com/nucoralinux/nux-maker.git
 cd nux-maker
-sudo ./install.sh
+sudo bash install.sh
 sudo nux-maker setup
