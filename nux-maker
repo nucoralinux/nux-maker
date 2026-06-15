@@ -1,0 +1,2097 @@
+#!/usr/bin/env bash
+# ══════════════════════════════════════════════════════════════════
+# nux-maker v4.5.0 — Nucora Linux Repo Management Tool
+# ══════════════════════════════════════════════════════════════════
+#
+# Full repo management: setup, build, index, classify, nginx, audit
+# Package class system: app / base / tool
+# Managed-by system: nux / system
+# Multi-language: Turkish / English
+#
+# Developed by Efe Enes
+# https://nucoralinux.com.tr
+#
+# ══════════════════════════════════════════════════════════════════
+
+set -euo pipefail
+shopt -s nullglob
+
+MAKER_VERSION="4.5.0"
+CONFIG_FILE="/etc/nux-maker/config.json"
+DEFAULT_REPO_ROOT="/srv/nux-repo"
+
+# ══════════════════════════════════════════════════════════════════
+# RENKLER
+# ══════════════════════════════════════════════════════════════════
+
+R='\033[1;31m'
+G='\033[1;32m'
+Y='\033[1;33m'
+C='\033[1;36m'
+W='\033[1;37m'
+M='\033[1;35m'
+DIM='\033[2m'
+RE='\033[0m'
+
+# ══════════════════════════════════════════════════════════════════
+# DİL SİSTEMİ
+# ══════════════════════════════════════════════════════════════════
+
+LANG_CURRENT="tr"
+
+detect_language() {
+    if [ -f "$CONFIG_FILE" ]; then
+        local cfg_lang
+        cfg_lang="$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('language','tr'))" 2>/dev/null || echo "tr")"
+        LANG_CURRENT="$cfg_lang"
+    else
+        local sys_lang="${LANG:-en_US}"
+        if [[ "$sys_lang" == tr* ]]; then
+            LANG_CURRENT="tr"
+        else
+            LANG_CURRENT="en"
+        fi
+    fi
+}
+
+detect_language
+
+# Çeviri tablosu
+declare -A I18N_TR I18N_EN
+
+# Setup
+I18N_TR[setup.title]="NUX-MAKER KURULUM SIHIRBAZI"
+I18N_TR[setup.welcome]="Bu sihirbaz sizi adım adım repo kurulumuna yönlendirecek."
+I18N_TR[setup.step]="Adım"
+I18N_TR[setup.repo_dir]="Repo Dizini"
+I18N_TR[setup.repo_dir_desc]="Repo dosyalarının saklanacağı dizin:"
+I18N_TR[setup.repo_info]="Repo Bilgileri"
+I18N_TR[setup.repo_name]="Repo adı"
+I18N_TR[setup.repo_desc]="Açıklama"
+I18N_TR[setup.repo_maintainer]="Bakımcı adı"
+I18N_TR[setup.web]="Web Sunucu"
+I18N_TR[setup.web_desc]="Bu repo hangi domain veya IP üzerinden yayınlanacak?"
+I18N_TR[setup.web_example]="Örnek: repo.example.com veya 192.168.1.50"
+I18N_TR[setup.domain]="Domain/IP"
+I18N_TR[setup.https]="HTTPS kullanılsın mı?"
+I18N_TR[setup.https_le]="Evet — Let's Encrypt (domain gerekli)"
+I18N_TR[setup.https_self]="Evet — Self-signed sertifika"
+I18N_TR[setup.https_no]="Hayır — sadece HTTP"
+I18N_TR[setup.port]="Port"
+I18N_TR[setup.arch]="Mimari"
+I18N_TR[setup.arch_desc]="Hedef mimari:"
+I18N_TR[setup.summary]="Özet"
+I18N_TR[setup.confirm]="Kurulum yapılsın mı?"
+I18N_TR[setup.done]="KURULUM TAMAMLANDI!"
+I18N_TR[setup.creating]="Dizinler oluşturuluyor..."
+I18N_TR[setup.nginx_creating]="Nginx yapılandırması oluşturuluyor..."
+I18N_TR[setup.nginx_enabling]="Nginx site etkinleştiriliyor..."
+I18N_TR[setup.index_creating]="Boş index oluşturuluyor..."
+I18N_TR[setup.config_saving]="Yapılandırma kaydediliyor..."
+I18N_TR[setup.ssl_obtaining]="SSL sertifikası alınıyor..."
+I18N_TR[setup.ssl_generating]="Self-signed sertifika oluşturuluyor..."
+I18N_TR[setup.lang]="Dil"
+I18N_TR[setup.lang_desc]="Arayüz dili:"
+I18N_TR[setup.select]="Seçiminiz"
+
+# Genel
+I18N_TR[yes_no]="[E/h]"
+I18N_TR[yes_chars]="eEyY"
+I18N_TR[error]="Hata"
+I18N_TR[success]="Başarılı"
+I18N_TR[warning]="Uyarı"
+I18N_TR[info]="Bilgi"
+I18N_TR[done]="Tamamlandı"
+I18N_TR[cancel]="İptal edildi"
+I18N_TR[creating]="Oluşturuluyor"
+I18N_TR[root_required]="Root yetkisi gerekli"
+
+# Build
+I18N_TR[build.extracting]="Dosyalar çıkartılıyor..."
+I18N_TR[build.control]="Control çıkartılıyor..."
+I18N_TR[build.metadata]="Metadata hazırlanıyor..."
+I18N_TR[build.scripts]="Scriptler hazırlanıyor..."
+I18N_TR[build.packing]="Paketleniyor..."
+I18N_TR[build.done]="Tamam"
+I18N_TR[build.already]="zaten repoda"
+I18N_TR[build.invalid_deb]="Geçersiz .deb"
+I18N_TR[build.invalid_name]="Geçersiz paket adı"
+I18N_TR[build.not_found]="Dosya bulunamadı"
+I18N_TR[build.deps_resolving]="Bağımlılıklar çözümleniyor..."
+I18N_TR[build.deps_checking]="Bağımlılıklar kontrol ediliyor"
+I18N_TR[build.deps_converting]="Bağımlılıklar .nux'a dönüştürülüyor"
+I18N_TR[build.deps_none]="Bağımlılık bulunamadı"
+I18N_TR[build.deps_nonew]="Yeni indirilecek bağımlılık yoktu"
+
+# Index
+I18N_TR[index.rebuilding]="Repo index yeniden oluşturuluyor..."
+I18N_TR[index.done]="Index oluşturuldu"
+I18N_TR[index.info_title]="REPO INDEX BİLGİSİ"
+I18N_TR[index.verify_title]="INDEX DOĞRULAMA"
+I18N_TR[index.total]="Toplam paket"
+I18N_TR[index.size]="Index boyutu"
+I18N_TR[index.last_update]="Son güncelleme"
+
+# Repo
+I18N_TR[repo.stats_title]="REPO İSTATİSTİKLERİ"
+I18N_TR[repo.audit_title]="REPO DEPENDENCY AUDIT"
+I18N_TR[repo.repair_title]="REPO DEPENDENCY REPAIR"
+I18N_TR[repo.clean_title]="REPO TEMİZLİK"
+I18N_TR[repo.all_ok]="Tüm dependency'ler karşılanıyor. Repo temiz."
+I18N_TR[repo.missing]="Eksik dependency'ler"
+I18N_TR[repo.repair_hint]="Eksikleri tamamlamak için: sudo nux-maker repo repair"
+
+# Classify
+I18N_TR[classify.title]="REPO RECLASSIFY"
+I18N_TR[classify.scanning]="Paketler taranıyor..."
+I18N_TR[classify.updated]="Güncellenen"
+I18N_TR[classify.skipped]="Atlanan"
+I18N_TR[classify.errors]="Hata"
+
+# Nginx
+I18N_TR[nginx.status_title]="NGINX DURUMU"
+I18N_TR[nginx.running]="Çalışıyor"
+I18N_TR[nginx.stopped]="Durmuş"
+I18N_TR[nginx.config_ok]="Geçerli"
+I18N_TR[nginx.config_err]="Hatalı"
+I18N_TR[nginx.testing]="Nginx config test ediliyor..."
+I18N_TR[nginx.repo_testing]="Repo erişimi test ediliyor..."
+
+# Config
+I18N_TR[config.title]="YAPILANDIRMA"
+I18N_TR[config.show_title]="MEVCUT YAPILANDIRMA"
+
+# About
+I18N_TR[about.dev]="Nux and Nucora are fully developed and maintained by one person."
+I18N_TR[about.by]="By: Efe Enes"
+I18N_TR[about.motto]="Not difficult — just time, patience, and persistence."
+
+# ─── English ───
+
+I18N_EN[setup.title]="NUX-MAKER SETUP WIZARD"
+I18N_EN[setup.welcome]="This wizard will guide you through repository setup."
+I18N_EN[setup.step]="Step"
+I18N_EN[setup.repo_dir]="Repository Directory"
+I18N_EN[setup.repo_dir_desc]="Where should the repository files be stored?"
+I18N_EN[setup.repo_info]="Repository Information"
+I18N_EN[setup.repo_name]="Repository name"
+I18N_EN[setup.repo_desc]="Description"
+I18N_EN[setup.repo_maintainer]="Maintainer name"
+I18N_EN[setup.web]="Web Server"
+I18N_EN[setup.web_desc]="What domain or IP will this repo be served on?"
+I18N_EN[setup.web_example]="Example: repo.example.com or 192.168.1.50"
+I18N_EN[setup.domain]="Domain/IP"
+I18N_EN[setup.https]="Use HTTPS?"
+I18N_EN[setup.https_le]="Yes — Let's Encrypt (domain required)"
+I18N_EN[setup.https_self]="Yes — Self-signed certificate"
+I18N_EN[setup.https_no]="No — HTTP only"
+I18N_EN[setup.port]="Port"
+I18N_EN[setup.arch]="Architecture"
+I18N_EN[setup.arch_desc]="Target architecture:"
+I18N_EN[setup.summary]="Summary"
+I18N_EN[setup.confirm]="Proceed with setup?"
+I18N_EN[setup.done]="SETUP COMPLETE!"
+I18N_EN[setup.creating]="Creating directories..."
+I18N_EN[setup.nginx_creating]="Creating Nginx configuration..."
+I18N_EN[setup.nginx_enabling]="Enabling Nginx site..."
+I18N_EN[setup.index_creating]="Creating empty index..."
+I18N_EN[setup.config_saving]="Saving configuration..."
+I18N_EN[setup.ssl_obtaining]="Obtaining SSL certificate..."
+I18N_EN[setup.ssl_generating]="Generating self-signed certificate..."
+I18N_EN[setup.lang]="Language"
+I18N_EN[setup.lang_desc]="Interface language:"
+I18N_EN[setup.select]="Your choice"
+
+I18N_EN[yes_no]="[Y/n]"
+I18N_EN[yes_chars]="yYeE"
+I18N_EN[error]="Error"
+I18N_EN[success]="Success"
+I18N_EN[warning]="Warning"
+I18N_EN[info]="Info"
+I18N_EN[done]="Done"
+I18N_EN[cancel]="Cancelled"
+I18N_EN[creating]="Creating"
+I18N_EN[root_required]="Root privileges required"
+
+I18N_EN[build.extracting]="Extracting files..."
+I18N_EN[build.control]="Extracting control..."
+I18N_EN[build.metadata]="Preparing metadata..."
+I18N_EN[build.scripts]="Preparing scripts..."
+I18N_EN[build.packing]="Packaging..."
+I18N_EN[build.done]="Done"
+I18N_EN[build.already]="already in repo"
+I18N_EN[build.invalid_deb]="Invalid .deb"
+I18N_EN[build.invalid_name]="Invalid package name"
+I18N_EN[build.not_found]="File not found"
+I18N_EN[build.deps_resolving]="Resolving dependencies..."
+I18N_EN[build.deps_checking]="Checking dependencies"
+I18N_EN[build.deps_converting]="Converting dependencies to .nux"
+I18N_EN[build.deps_none]="No dependencies found"
+I18N_EN[build.deps_nonew]="No new dependencies to download"
+
+I18N_EN[index.rebuilding]="Rebuilding repository index..."
+I18N_EN[index.done]="Index created"
+I18N_EN[index.info_title]="REPO INDEX INFO"
+I18N_EN[index.verify_title]="INDEX VERIFICATION"
+I18N_EN[index.total]="Total packages"
+I18N_EN[index.size]="Index size"
+I18N_EN[index.last_update]="Last update"
+
+I18N_EN[repo.stats_title]="REPO STATISTICS"
+I18N_EN[repo.audit_title]="REPO DEPENDENCY AUDIT"
+I18N_EN[repo.repair_title]="REPO DEPENDENCY REPAIR"
+I18N_EN[repo.clean_title]="REPO CLEANUP"
+I18N_EN[repo.all_ok]="All dependencies satisfied. Repository is clean."
+I18N_EN[repo.missing]="Missing dependencies"
+I18N_EN[repo.repair_hint]="To fix: sudo nux-maker repo repair"
+
+I18N_EN[classify.title]="REPO RECLASSIFY"
+I18N_EN[classify.scanning]="Scanning packages..."
+I18N_EN[classify.updated]="Updated"
+I18N_EN[classify.skipped]="Skipped"
+I18N_EN[classify.errors]="Errors"
+
+I18N_EN[nginx.status_title]="NGINX STATUS"
+I18N_EN[nginx.running]="Running"
+I18N_EN[nginx.stopped]="Stopped"
+I18N_EN[nginx.config_ok]="Valid"
+I18N_EN[nginx.config_err]="Invalid"
+I18N_EN[nginx.testing]="Testing Nginx config..."
+I18N_EN[nginx.repo_testing]="Testing repo access..."
+
+I18N_EN[config.title]="CONFIGURATION"
+I18N_EN[config.show_title]="CURRENT CONFIGURATION"
+
+I18N_EN[about.dev]="Nux and Nucora are fully developed and maintained by one person."
+I18N_EN[about.by]="By: Efe Enes"
+I18N_EN[about.motto]="Not difficult — just time, patience, and persistence."
+
+# Çeviri fonksiyonu
+t() {
+    local key="$1"
+    if [ "$LANG_CURRENT" = "tr" ]; then
+        echo "${I18N_TR[$key]:-$key}"
+    else
+        echo "${I18N_EN[$key]:-$key}"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════
+# CONFIG OKUYUCU
+# ══════════════════════════════════════════════════════════════════
+
+cfg() {
+    local key="$1"
+    local default="${2:-}"
+    if [ -f "$CONFIG_FILE" ]; then
+        python3 -c "
+import json
+d = json.load(open('$CONFIG_FILE'))
+keys = '$key'.split('.')
+for k in keys:
+    if isinstance(d, dict):
+        d = d.get(k, '')
+    else:
+        d = ''
+        break
+print(d if d else '$default')
+" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
+# Config varsa değerleri yükle
+if [ -f "$CONFIG_FILE" ]; then
+    REPO_ROOT="$(cfg repo.root "$DEFAULT_REPO_ROOT")"
+    PACKAGES_DIR="$(cfg repo.packages_dir "$REPO_ROOT/packages")"
+    CACHE_DIR="$(cfg repo.cache_dir "$REPO_ROOT/.cache")"
+    LOG_DIR="$(cfg repo.log_dir "$REPO_ROOT/.logs")"
+    CACHE_DB="$CACHE_DIR/metadata_cache.json"
+    TARGET_SUITE="$(cfg debian.suite "trixie")"
+    TARGET_ARCH="$(cfg debian.arch "amd64")"
+    TARGET_MIRROR="$(cfg debian.mirror "http://deb.debian.org/debian")"
+    TARGET_SECURITY="$(cfg debian.security "http://security.debian.org/debian-security")"
+else
+    REPO_ROOT="$DEFAULT_REPO_ROOT"
+    PACKAGES_DIR="$REPO_ROOT/packages"
+    CACHE_DIR="$REPO_ROOT/.cache"
+    LOG_DIR="$REPO_ROOT/.logs"
+    CACHE_DB="$CACHE_DIR/metadata_cache.json"
+    TARGET_SUITE="trixie"
+    TARGET_ARCH="amd64"
+    TARGET_MIRROR="http://deb.debian.org/debian"
+    TARGET_SECURITY="http://security.debian.org/debian-security"
+fi
+
+BUILD_LOG="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+
+APT_SANDBOX="$CACHE_DIR/apt-$TARGET_SUITE-$TARGET_ARCH"
+APT_ETC="$APT_SANDBOX/etc/apt"
+APT_VAR="$APT_SANDBOX/var/lib/apt"
+APT_CACHE_DIR="$APT_SANDBOX/var/cache/apt/archives"
+APT_DPKG="$APT_SANDBOX/var/lib/dpkg"
+APT_STATUS="$APT_DPKG/status"
+
+# ══════════════════════════════════════════════════════════════════
+# BAYRAKLAR
+# ══════════════════════════════════════════════════════════════════
+
+NO_UPDATE=0
+WITH_DEPS=0
+DRY_RUN=0
+NO_CACHE=0
+CLEAR_CACHE=0
+MAX_DEPTH=10
+KEEP_ALL_DEPS=0
+FORCE_CLASS=""
+DEB_FILES=()
+PKG_NAMES=()
+
+# ══════════════════════════════════════════════════════════════════
+# TOOL WHITELIST
+# ══════════════════════════════════════════════════════════════════
+
+is_tool_package() {
+    local pkg="$1"
+    [[ "$pkg" == "nux" ]] && return 0
+    [[ "$pkg" == nucora-* ]] && return 0
+    return 1
+}
+
+determine_class() {
+    local pkg="$1"
+    local default_class="${2:-app}"
+    if is_tool_package "$pkg"; then
+        echo "tool"
+        return
+    fi
+    echo "$default_class"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# YARDIMCILAR
+# ══════════════════════════════════════════════════════════════════
+
+TEMP_DIRS=()
+
+cleanup_all() {
+    local dir
+    for dir in "${TEMP_DIRS[@]}"; do
+        [ -n "${dir:-}" ] && [ -d "$dir" ] && rm -rf "$dir"
+    done
+}
+
+trap cleanup_all EXIT INT TERM
+
+register_temp() { TEMP_DIRS+=("$1"); }
+
+log_msg() {
+    local level="$1"; shift
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" >> "$BUILD_LOG" 2>/dev/null || true
+}
+
+log_info()  { log_msg INFO  "$@"; }
+log_warn()  { log_msg WARN  "$@"; }
+log_error() { log_msg ERROR "$@"; }
+log_ok()    { log_msg OK    "$@"; }
+
+progress_bar() {
+    local current="$1" total="$2" label="${3:-Processing}"
+    local width=32
+    [ "$total" -le 0 ] && return 0
+    local pct=$(( current * 100 / total ))
+    local filled=$(( current * width / total ))
+    local empty=$(( width - filled ))
+    local bar=""
+    local i
+    for ((i=0; i<filled; i++)); do bar+="█"; done
+    for ((i=0; i<empty; i++)); do bar+="░"; done
+    printf "\r  ${C}%s${RE} [${G}%s${RE}] %3d%% (%d/%d)" "$label" "$bar" "$pct" "$current" "$total"
+    [ "$current" -eq "$total" ] && echo ""
+}
+
+confirm() {
+    local msg="$1"
+    local yn
+    yn="$(t yes_no)"
+    read -rp "$(echo -e "  ${Y}[?]${RE} $msg $yn: ")" answer
+    local chars
+    chars="$(t yes_chars)"
+    [[ -z "$answer" || "$chars" == *"$answer"* ]]
+}
+
+# ══════════════════════════════════════════════════════════════════
+# CACHE
+# ══════════════════════════════════════════════════════════════════
+
+cache_init() {
+    mkdir -p "$CACHE_DIR" 2>/dev/null || true
+    [ "$CLEAR_CACHE" -eq 1 ] && { rm -f "$CACHE_DB"; echo -e "${G}✓ Cache$(t done)${RE}"; }
+    [ "$NO_CACHE" -eq 1 ] && rm -f "$CACHE_DB"
+    [ -f "$CACHE_DB" ] || printf '{}' > "$CACHE_DB"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# SETUP WIZARD
+# ══════════════════════════════════════════════════════════════════
+
+run_setup() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${R}$(t root_required)${RE}"
+        exit 1
+    fi
+
+    echo -e "${C}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║  🚀 $(t setup.title) v${MAKER_VERSION}"
+    echo "║"
+    echo "║  $(t setup.welcome)"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${RE}"
+
+    # Adım 0 — Dil
+    echo -e "  ${W}$(t setup.step) 0/5 — $(t setup.lang)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    echo -e "  $(t setup.lang_desc)"
+    echo ""
+    echo -e "  1) Türkçe"
+    echo -e "  2) English"
+    echo ""
+    read -rp "  $(t setup.select) [1]: " lang_choice
+    case "${lang_choice:-1}" in
+        2) LANG_CURRENT="en" ;;
+        *) LANG_CURRENT="tr" ;;
+    esac
+    echo ""
+
+    # Adım 1 — Repo dizini
+    echo -e "  ${W}$(t setup.step) 1/5 — $(t setup.repo_dir)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    echo -e "  $(t setup.repo_dir_desc)"
+    echo ""
+    read -rp "  [$DEFAULT_REPO_ROOT]: " repo_root
+    repo_root="${repo_root:-$DEFAULT_REPO_ROOT}"
+    echo -e "  ${G}✓${RE} $repo_root"
+    echo ""
+
+    # Adım 2 — Repo bilgileri
+    echo -e "  ${W}$(t setup.step) 2/5 — $(t setup.repo_info)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    read -rp "  $(t setup.repo_name) [my-nux-repo]: " repo_name
+    repo_name="${repo_name:-my-nux-repo}"
+    read -rp "  $(t setup.repo_desc) [Nux Package Repository]: " repo_desc
+    repo_desc="${repo_desc:-Nux Package Repository}"
+    read -rp "  $(t setup.repo_maintainer) [Admin]: " repo_maintainer
+    repo_maintainer="${repo_maintainer:-Admin}"
+    echo ""
+
+    # Adım 3 — Web sunucu
+    echo -e "  ${W}$(t setup.step) 3/5 — $(t setup.web)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    echo -e "  $(t setup.web_desc)"
+    echo -e "  ${DIM}$(t setup.web_example)${RE}"
+    echo ""
+    read -rp "  $(t setup.domain): " web_domain
+    if [ -z "$web_domain" ]; then
+        echo -e "  ${R}$(t error): Domain/IP gerekli${RE}"
+        exit 1
+    fi
+    echo ""
+
+    echo -e "  $(t setup.https)"
+    echo -e "  1) $(t setup.https_le)"
+    echo -e "  2) $(t setup.https_self)"
+    echo -e "  3) $(t setup.https_no)"
+    echo ""
+    read -rp "  $(t setup.select) [3]: " ssl_choice
+    ssl_choice="${ssl_choice:-3}"
+
+    local ssl_type="none"
+    local web_port=80
+    local web_protocol="http"
+    case "$ssl_choice" in
+        1) ssl_type="letsencrypt"; web_port=443; web_protocol="https" ;;
+        2) ssl_type="selfsigned"; web_port=443; web_protocol="https" ;;
+        *) ssl_type="none"; web_port=80; web_protocol="http" ;;
+    esac
+    echo ""
+
+    read -rp "  $(t setup.port) [$web_port]: " custom_port
+    web_port="${custom_port:-$web_port}"
+    echo ""
+
+    # Adım 4 — Mimari
+    echo -e "  ${W}$(t setup.step) 4/5 — $(t setup.arch)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    echo -e "  $(t setup.arch_desc)"
+    echo -e "  1) amd64"
+    echo -e "  2) arm64"
+    echo -e "  3) i386"
+    echo ""
+    read -rp "  $(t setup.select) [1]: " arch_choice
+    local target_arch="amd64"
+    case "${arch_choice:-1}" in
+        2) target_arch="arm64" ;;
+        3) target_arch="i386" ;;
+        *) target_arch="amd64" ;;
+    esac
+    echo ""
+
+    # Adım 5 — Özet
+    echo -e "  ${W}$(t setup.step) 5/5 — $(t setup.summary)${RE}"
+    echo -e "  ${DIM}────────────────────────────────────────${RE}"
+    echo ""
+    echo -e "╔══════════════════════════════════════════════════════╗"
+    echo -e "║  $(t setup.summary)                                  "
+    echo -e "╠══════════════════════════════════════════════════════╣"
+    echo -e "║  📁 Repo dizini   : $repo_root"
+    echo -e "║  📛 Repo adı      : $repo_name"
+    echo -e "║  👤 Bakımcı       : $repo_maintainer"
+    echo -e "║  🌐 Domain/IP     : $web_domain"
+    echo -e "║  🔒 SSL           : $ssl_type"
+    echo -e "║  🔌 Port          : $web_port"
+    echo -e "║  🏗️  Mimari        : $target_arch"
+    echo -e "║  🌐 Dil           : $LANG_CURRENT"
+    echo -e "║"
+    echo -e "║  Oluşturulacak yapı:"
+    echo -e "║  $repo_root/"
+    echo -e "║  ├── packages/"
+    echo -e "║  ├── .cache/"
+    echo -e "║  ├── .logs/"
+    echo -e "║  ├── index.json"
+    echo -e "║  └── repo.json"
+    echo -e "╚══════════════════════════════════════════════════════╝"
+    echo ""
+
+    if ! confirm "$(t setup.confirm)"; then
+        echo -e "  ${Y}$(t cancel)${RE}"
+        exit 0
+    fi
+
+    echo ""
+
+    # ── Dizinler ──
+    echo -e "  ⠋ $(t setup.creating)"
+    mkdir -p "$repo_root/packages" "$repo_root/.cache" "$repo_root/.logs"
+    chmod 755 "$repo_root" "$repo_root/packages"
+    echo -e "  ${G}✓${RE} $repo_root/packages"
+    echo -e "  ${G}✓${RE} $repo_root/.cache"
+    echo -e "  ${G}✓${RE} $repo_root/.logs"
+
+    # ── repo.json ──
+    python3 -c "
+import json
+from datetime import datetime
+repo = {
+    'name': '$repo_name',
+    'description': '$repo_desc',
+    'maintainer': '$repo_maintainer',
+    'url': '${web_protocol}://${web_domain}',
+    'created_at': datetime.utcnow().isoformat() + 'Z',
+    'nux_maker_version': '$MAKER_VERSION'
+}
+with open('$repo_root/repo.json', 'w') as f:
+    json.dump(repo, f, indent=2, ensure_ascii=False)
+"
+    echo -e "  ${G}✓${RE} repo.json"
+
+    # ── index.json ──
+    echo -e "  ⠋ $(t setup.index_creating)"
+    python3 -c "
+import json
+from datetime import datetime
+index = {
+    'generated_at': datetime.utcnow().isoformat() + 'Z',
+    'generator': 'nux-maker/$MAKER_VERSION',
+    'package_count': 0,
+    'version_count': 0,
+    'packages': {}
+}
+with open('$repo_root/index.json', 'w') as f:
+    json.dump(index, f, indent=2, ensure_ascii=False)
+"
+    echo -e "  ${G}✓${RE} index.json"
+
+    # ── Nginx config ──
+    echo -e "  ⠋ $(t setup.nginx_creating)"
+
+    local nginx_conf="/etc/nginx/sites-available/nux-repo-${repo_name}"
+    local nginx_link="/etc/nginx/sites-enabled/nux-repo-${repo_name}"
+
+    if [ "$ssl_type" = "none" ]; then
+        cat > "$nginx_conf" <<NGINXEOF
+server {
+    listen ${web_port};
+    server_name ${web_domain};
+
+    root ${repo_root};
+    autoindex on;
+    autoindex_format json;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location /packages/ {
+        types {
+            application/octet-stream nux;
+        }
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    location /index.json {
+        add_header Cache-Control "no-cache, must-revalidate";
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    access_log /var/log/nginx/nux-repo-${repo_name}.access.log;
+    error_log /var/log/nginx/nux-repo-${repo_name}.error.log;
+}
+NGINXEOF
+
+    elif [ "$ssl_type" = "selfsigned" ]; then
+        echo -e "  ⠋ $(t setup.ssl_generating)"
+        local ssl_dir="/etc/nginx/ssl/nux-repo-${repo_name}"
+        mkdir -p "$ssl_dir"
+        openssl req -x509 -nodes -days 3650 \
+            -newkey rsa:2048 \
+            -keyout "$ssl_dir/key.pem" \
+            -out "$ssl_dir/cert.pem" \
+            -subj "/CN=${web_domain}" \
+            >/dev/null 2>&1
+        echo -e "  ${G}✓${RE} Self-signed SSL"
+
+        cat > "$nginx_conf" <<NGINXEOF
+server {
+    listen 80;
+    server_name ${web_domain};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen ${web_port} ssl http2;
+    server_name ${web_domain};
+
+    ssl_certificate ${ssl_dir}/cert.pem;
+    ssl_certificate_key ${ssl_dir}/key.pem;
+
+    root ${repo_root};
+    autoindex on;
+    autoindex_format json;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location /packages/ {
+        types {
+            application/octet-stream nux;
+        }
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    location /index.json {
+        add_header Cache-Control "no-cache, must-revalidate";
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    access_log /var/log/nginx/nux-repo-${repo_name}.access.log;
+    error_log /var/log/nginx/nux-repo-${repo_name}.error.log;
+}
+NGINXEOF
+
+    elif [ "$ssl_type" = "letsencrypt" ]; then
+        # Önce HTTP ile kur, sonra certbot çalıştır
+        cat > "$nginx_conf" <<NGINXEOF
+server {
+    listen 80;
+    server_name ${web_domain};
+
+    root ${repo_root};
+    autoindex on;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location /packages/ {
+        types {
+            application/octet-stream nux;
+        }
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    location /index.json {
+        add_header Cache-Control "no-cache, must-revalidate";
+        add_header Access-Control-Allow-Origin *;
+    }
+}
+NGINXEOF
+    fi
+
+    echo -e "  ${G}✓${RE} Nginx config: $nginx_conf"
+
+    # ── Nginx etkinleştir ──
+    echo -e "  ⠋ $(t setup.nginx_enabling)"
+    ln -sf "$nginx_conf" "$nginx_link" 2>/dev/null || true
+
+    # Default site çakışma kontrolü
+    if [ -f /etc/nginx/sites-enabled/default ]; then
+        rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    fi
+
+    nginx -t >/dev/null 2>&1 && {
+        systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
+        echo -e "  ${G}✓${RE} Nginx reload"
+    } || {
+        echo -e "  ${R}✗${RE} Nginx config hatası! Manuel kontrol edin: nginx -t"
+    }
+
+    # Let's Encrypt
+    if [ "$ssl_type" = "letsencrypt" ]; then
+        echo -e "  ⠋ $(t setup.ssl_obtaining)"
+        certbot --nginx -d "$web_domain" --non-interactive --agree-tos \
+            --register-unsafely-without-email >/dev/null 2>&1 && {
+            echo -e "  ${G}✓${RE} Let's Encrypt SSL"
+        } || {
+            echo -e "  ${Y}⚠${RE} SSL alınamadı. Manuel deneyin: certbot --nginx -d $web_domain"
+        }
+    fi
+
+    # ── Config kaydet ──
+    echo -e "  ⠋ $(t setup.config_saving)"
+    mkdir -p /etc/nux-maker
+
+    python3 -c "
+import json
+config = {
+    'version': '$MAKER_VERSION',
+    'language': '$LANG_CURRENT',
+    'repo': {
+        'name': '$repo_name',
+        'description': '$repo_desc',
+        'maintainer': '$repo_maintainer',
+        'root': '$repo_root',
+        'packages_dir': '${repo_root}/packages',
+        'cache_dir': '${repo_root}/.cache',
+        'log_dir': '${repo_root}/.logs'
+    },
+    'web': {
+        'domain': '$web_domain',
+        'protocol': '$web_protocol',
+        'port': int('$web_port'),
+        'ssl_type': '$ssl_type',
+        'nginx_config': '$nginx_conf'
+    },
+    'debian': {
+        'suite': 'trixie',
+        'arch': '$target_arch',
+        'mirror': 'http://deb.debian.org/debian',
+        'security': 'http://security.debian.org/debian-security'
+    },
+    'build': {
+        'xz_threads': 0,
+        'xz_level': 3,
+        'max_repair_depth': 10
+    }
+}
+with open('/etc/nux-maker/config.json', 'w') as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+"
+    echo -e "  ${G}✓${RE} /etc/nux-maker/config.json"
+
+    # ── Sonuç ──
+    local repo_url="${web_protocol}://${web_domain}"
+    echo ""
+    echo -e "╔══════════════════════════════════════════════════════╗"
+    echo -e "║                                                      ║"
+    echo -e "║  🎉 $(t setup.done)                                  "
+    echo -e "║                                                      ║"
+    echo -e "║  📦 Paket ekle:                                      ║"
+    echo -e "║     nux-maker build discord.deb                      ║"
+    echo -e "║     nux-maker build --with-deps zoom                 ║"
+    echo -e "║                                                      ║"
+    echo -e "║  📋 Index güncelle:                                  ║"
+    echo -e "║     nux-maker index rebuild                          ║"
+    echo -e "║                                                      ║"
+    echo -e "║  📊 Repo durumu:                                     ║"
+    echo -e "║     nux-maker repo stats                             ║"
+    echo -e "║                                                      ║"
+    echo -e "║  🌐 Repo URL:                                        ║"
+    echo -e "║     ${repo_url}                                       "
+    echo -e "║                                                      ║"
+    echo -e "║  🔗 Client tarafında repo eklemek için:              ║"
+    echo -e "║     nux repo add ${repo_name} ${repo_url}             "
+    echo -e "║                                                      ║"
+    echo -e "╚══════════════════════════════════════════════════════╝"
+    echo ""
+    echo -e "${DIM}$(t about.dev)${RE}"
+    echo -e "${DIM}$(t about.by)${RE}"
+    echo -e "${DIM}$(t about.motto)${RE}"
+    echo ""
+}
+
+# ══════════════════════════════════════════════════════════════════
+# DEBIAN APT SANDBOX
+# ══════════════════════════════════════════════════════════════════
+
+init_debian_sandbox() {
+    mkdir -p \
+        "$APT_ETC/preferences.d" \
+        "$APT_ETC/apt.conf.d" \
+        "$APT_ETC/trusted.gpg.d" \
+        "$APT_VAR/lists/partial" \
+        "$APT_CACHE_DIR/partial" \
+        "$APT_DPKG"
+
+    [ -f "$APT_STATUS" ] || : > "$APT_STATUS"
+
+    cat > "$APT_ETC/sources.list" <<SRCEOF
+deb [arch=$TARGET_ARCH signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] $TARGET_MIRROR $TARGET_SUITE main contrib non-free non-free-firmware
+deb [arch=$TARGET_ARCH signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] $TARGET_MIRROR ${TARGET_SUITE}-updates main contrib non-free non-free-firmware
+deb [arch=$TARGET_ARCH signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] $TARGET_SECURITY ${TARGET_SUITE}-security main contrib non-free non-free-firmware
+SRCEOF
+
+    if [ ! -f /usr/share/keyrings/debian-archive-keyring.gpg ]; then
+        apt-get install -y -qq debian-archive-keyring >/dev/null 2>&1 || true
+    fi
+}
+
+get_apt_opts() {
+    echo \
+        -o "Dir=$APT_SANDBOX" \
+        -o "Dir::Etc=$APT_ETC" \
+        -o "Dir::Etc::sourcelist=$APT_ETC/sources.list" \
+        -o "Dir::Etc::sourceparts=-" \
+        -o "Dir::State=$APT_VAR" \
+        -o "Dir::State::status=$APT_STATUS" \
+        -o "Dir::Cache=$APT_SANDBOX/var/cache/apt" \
+        -o "Dir::Cache::archives=$APT_CACHE_DIR" \
+        -o "APT::Architecture=$TARGET_ARCH" \
+        -o "Acquire::Languages=none"
+}
+
+SANDBOX_UPDATED=0
+
+debian_update() {
+    [ "$SANDBOX_UPDATED" -eq 1 ] && return 0
+    init_debian_sandbox
+    echo -e "${C}Debian $TARGET_SUITE repo index...${RE}"
+    local opts
+    opts="$(get_apt_opts)"
+    apt-get $opts update -qq >/dev/null 2>&1 || {
+        echo -e "${R}Debian repo update failed${RE}" >&2
+        return 1
+    }
+    SANDBOX_UPDATED=1
+    echo -e "${G}Debian $TARGET_SUITE ready${RE}"
+}
+
+debian_pkg_exists() {
+    local opts
+    opts="$(get_apt_opts)"
+    apt-cache $opts show "$1" >/dev/null 2>&1
+}
+
+debian_download() {
+    local pkg="$1" outdir="$2"
+    local opts
+    opts="$(get_apt_opts)"
+    (cd "$outdir" && apt-get $opts download "$pkg" >/dev/null 2>&1)
+}
+
+debian_depends_recursive() {
+    local pkg="$1"
+    local opts
+    opts="$(get_apt_opts)"
+    apt-cache $opts depends --recurse \
+        --no-recommends --no-suggests --no-conflicts \
+        --no-breaks --no-replaces --no-enhances \
+        "$pkg" 2>/dev/null \
+    | sed -n 's/.*Depends: //p; s/.*PreDepends: //p' \
+    | sed 's/<//g; s/>//g' \
+    | grep -v "^${pkg}$" \
+    | sort -u || true
+}
+
+# ══════════════════════════════════════════════════════════════════
+# REPO HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+already_in_repo() {
+    local pkg_name="$1"
+    [[ "$pkg_name" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || return 1
+    compgen -G "$PACKAGES_DIR/${pkg_name}_*.nux" >/dev/null 2>&1
+}
+
+# ══════════════════════════════════════════════════════════════════
+# DEPENDENCY PARSER
+# ══════════════════════════════════════════════════════════════════
+
+json_list_from_field() {
+    local raw="$1" field="$2" keep_all="$3"
+    python3 - "$raw" "$field" "$keep_all" <<'PYPARSE'
+import json, re, sys
+raw = sys.argv[1].strip()
+field = sys.argv[2].strip()
+keep_all = sys.argv[3].strip() == "1"
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+if not raw:
+    print("[]"); sys.exit(0)
+IGNORE = [r"^.*-keyring$", r"^apt-transport-https$", r"^software-properties-common$",
+          r"^lsb-release$", r"^gnupg2?$", r"^dirmngr$", r"^debian-archive-keyring$",
+          r"^ubuntu-keyring$", r"^nucora-archive-keyring$"]
+def norm(d):
+    d = re.sub(r"\s*\(.*?\)","",d).strip()
+    d = re.sub(r"\s*\[.*?\]","",d).strip()
+    d = re.sub(r":[A-Za-z0-9_-]+$","",d).strip()
+    return d
+def ign(n):
+    if keep_all: return False
+    if field not in ("depends","pre_depends","recommends","suggests"): return False
+    return any(re.match(p,n) for p in IGNORE)
+items = []
+for expr in raw.replace("\n"," ").replace("\r"," ").split(","):
+    expr = expr.strip()
+    if not expr: continue
+    sel = None
+    for alt in expr.split("|"):
+        n = norm(alt.strip())
+        if n and PKG_RE.fullmatch(n) and not ign(n):
+            sel = n; break
+    if sel and sel not in items: items.append(sel)
+print(json.dumps(items, ensure_ascii=False))
+PYPARSE
+}
+
+# ══════════════════════════════════════════════════════════════════
+# SCRIPT WRAPPER
+# ══════════════════════════════════════════════════════════════════
+
+create_script_wrapper() {
+    local script_type="$1" pkg_name="$2" source_script="$3" target_dir="$4"
+    local wrapper_name default_arg
+    case "$script_type" in
+        preinst)  wrapper_name="pre-install.sh";  default_arg="install"   ;;
+        postinst) wrapper_name="post-install.sh"; default_arg="configure" ;;
+        prerm)    wrapper_name="pre-remove.sh";   default_arg="remove"    ;;
+        postrm)   wrapper_name="post-remove.sh";  default_arg="remove"    ;;
+        *) return 1 ;;
+    esac
+    [ ! -f "$source_script" ] && return 0
+    cp "$source_script" "$target_dir/.${script_type}.real"
+    chmod +x "$target_dir/.${script_type}.real"
+    cat > "$target_dir/$wrapper_name" <<WRAPPER
+#!/bin/sh
+export DPKG_MAINTSCRIPT_PACKAGE="$pkg_name"
+export DPKG_MAINTSCRIPT_NAME="$script_type"
+export DPKG_ADMINDIR="/var/lib/dpkg"
+[ "\$#" -eq 0 ] && set -- "$default_arg"
+exec /bin/sh "\$(dirname "\$0")/.${script_type}.real" "\$@"
+WRAPPER
+    chmod +x "$target_dir/$wrapper_name"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# METADATA GENERATOR
+# ══════════════════════════════════════════════════════════════════
+
+generate_metadata() {
+    local output_file="$1"
+    python3 - "$output_file" <<'PYMETA'
+import json, os, sys
+output = sys.argv[1]
+def si(v, d=0):
+    try: return int(v)
+    except: return d
+meta = {
+    "name": os.environ.get("META_NAME",""),
+    "version": os.environ.get("META_VERSION",""),
+    "architecture": os.environ.get("META_ARCH","amd64"),
+    "description": os.environ.get("META_DESC",""),
+    "maintainer": os.environ.get("META_MAINTAINER",""),
+    "section": os.environ.get("META_SECTION","misc"),
+    "priority": os.environ.get("META_PRIORITY","optional"),
+    "homepage": os.environ.get("META_HOMEPAGE",""),
+    "class": os.environ.get("META_CLASS","app"),
+    "managed_by": os.environ.get("META_MANAGED_BY","nux"),
+    "depends": json.loads(os.environ.get("META_DEPENDS_JSON","[]")),
+    "pre_depends": json.loads(os.environ.get("META_PRE_DEPENDS_JSON","[]")),
+    "recommends": json.loads(os.environ.get("META_RECOMMENDS_JSON","[]")),
+    "suggests": json.loads(os.environ.get("META_SUGGESTS_JSON","[]")),
+    "conflicts": json.loads(os.environ.get("META_CONFLICTS_JSON","[]")),
+    "provides": json.loads(os.environ.get("META_PROVIDES_JSON","[]")),
+    "installed_size": si(os.environ.get("META_INSTALLED_SIZE","0")),
+    "size": si(os.environ.get("META_SIZE","0")),
+    "source_deb_sha256": os.environ.get("META_SOURCE_SHA256",""),
+    "source_type": os.environ.get("META_SOURCE_TYPE","deb-import"),
+    "protected": os.environ.get("META_PROTECTED","false") == "true",
+    "built_by": f"nux-maker/{os.environ.get('META_MAKER_VERSION','4.5.0')}",
+    "built_date": os.environ.get("META_BUILT_DATE",""),
+    "nux_format_version": "4.5",
+}
+with open(output, "w", encoding="utf-8") as f:
+    json.dump(meta, f, indent=2, ensure_ascii=False)
+PYMETA
+}
+
+# ══════════════════════════════════════════════════════════════════
+# BUILD ONE
+# ══════════════════════════════════════════════════════════════════
+
+build_one() {
+    local DEB_FILE="$1"
+    local PKG_CLASS="${2:-app}"
+
+    [ -f "$DEB_FILE" ] || {
+        echo -e "${R}$(t error): $(t build.not_found): $DEB_FILE${RE}" >&2
+        return 1
+    }
+
+    local PKG_NAME
+    PKG_NAME="$(dpkg-deb -f "$DEB_FILE" Package 2>/dev/null || true)"
+    [ -z "$PKG_NAME" ] && { echo -e "${R}$(t build.invalid_deb): $DEB_FILE${RE}" >&2; return 1; }
+    [[ "$PKG_NAME" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || { echo -e "${R}$(t build.invalid_name): $PKG_NAME${RE}" >&2; return 1; }
+
+    local FINAL_CLASS
+    FINAL_CLASS="$(determine_class "$PKG_NAME" "$PKG_CLASS")"
+    [ -n "$FORCE_CLASS" ] && { FINAL_CLASS="$FORCE_CLASS"; is_tool_package "$PKG_NAME" && FINAL_CLASS="tool"; }
+
+    if already_in_repo "$PKG_NAME"; then
+        echo -e "  ${G}[=]${RE} $PKG_NAME $(t build.already) ${DIM}[$FINAL_CLASS]${RE}"
+        return 0
+    fi
+
+    local PKG_VERSION PKG_ARCH PKG_DESC PKG_MAINTAINER PKG_SECTION PKG_PRIORITY PKG_HOMEPAGE DEB_SIZE
+    PKG_VERSION="$(dpkg-deb -f "$DEB_FILE" Version 2>/dev/null || echo "0.0.1")"
+    PKG_ARCH="$(dpkg-deb -f "$DEB_FILE" Architecture 2>/dev/null || echo "amd64")"
+    PKG_DESC="$(dpkg-deb -f "$DEB_FILE" Description 2>/dev/null | head -1 || echo "")"
+    PKG_MAINTAINER="$(dpkg-deb -f "$DEB_FILE" Maintainer 2>/dev/null || echo "Unknown")"
+    PKG_SECTION="$(dpkg-deb -f "$DEB_FILE" Section 2>/dev/null || echo "misc")"
+    PKG_PRIORITY="$(dpkg-deb -f "$DEB_FILE" Priority 2>/dev/null || echo "optional")"
+    PKG_HOMEPAGE="$(dpkg-deb -f "$DEB_FILE" Homepage 2>/dev/null || echo "")"
+    DEB_SIZE="$(stat -c%s "$DEB_FILE" 2>/dev/null || echo 0)"
+
+    local CC="$G"; case "$FINAL_CLASS" in base) CC="$Y" ;; tool) CC="$M" ;; esac
+    echo -e "${C}════════════════════════════════════════════════════════════${RE}"
+    echo -e "  ${G}Paket:${RE} $PKG_NAME  ${G}Ver:${RE} $PKG_VERSION  ${G}Class:${RE} ${CC}${FINAL_CLASS}${RE}"
+
+    local WB="/tmp"; [ -d /dev/shm ] && [ -w /dev/shm ] && WB="/dev/shm"
+    local WD; WD="$(mktemp -d "$WB/nux_${PKG_NAME}_XXXXXX")"; register_temp "$WD"
+    mkdir -p "$WD/control" "$WD/pkg/files" "$WD/pkg/scripts" "$WD/pkg/control"
+
+    echo -e "  ${Y}[1/5]${RE} $(t build.extracting)"
+    dpkg-deb -x "$DEB_FILE" "$WD/pkg/files" 2>/dev/null
+
+    echo -e "  ${Y}[2/5]${RE} $(t build.control)"
+    dpkg-deb -e "$DEB_FILE" "$WD/control" 2>/dev/null || true
+
+    echo -e "  ${Y}[3/5]${RE} $(t build.metadata)"
+    local DEP PRE REC SUG CON PRO
+    DEP="$(dpkg-deb -f "$DEB_FILE" Depends 2>/dev/null || true)"
+    PRE="$(dpkg-deb -f "$DEB_FILE" Pre-Depends 2>/dev/null || true)"
+    REC="$(dpkg-deb -f "$DEB_FILE" Recommends 2>/dev/null || true)"
+    SUG="$(dpkg-deb -f "$DEB_FILE" Suggests 2>/dev/null || true)"
+    CON="$(dpkg-deb -f "$DEB_FILE" Conflicts 2>/dev/null || true)"
+    PRO="$(dpkg-deb -f "$DEB_FILE" Provides 2>/dev/null || true)"
+
+    local DJ PJ RJ SJ CJ PVJ
+    DJ="$(json_list_from_field "$DEP" "depends" "$KEEP_ALL_DEPS")"
+    PJ="$(json_list_from_field "$PRE" "pre_depends" "$KEEP_ALL_DEPS")"
+    RJ="$(json_list_from_field "$REC" "recommends" "$KEEP_ALL_DEPS")"
+    SJ="$(json_list_from_field "$SUG" "suggests" "$KEEP_ALL_DEPS")"
+    CJ="$(json_list_from_field "$CON" "conflicts" "$KEEP_ALL_DEPS")"
+    PVJ="$(json_list_from_field "$PRO" "provides" "$KEEP_ALL_DEPS")"
+
+    echo -e "  ${Y}[4/5]${RE} $(t build.scripts)"
+    create_script_wrapper "preinst"  "$PKG_NAME" "$WD/control/preinst"  "$WD/pkg/scripts"
+    create_script_wrapper "postinst" "$PKG_NAME" "$WD/control/postinst" "$WD/pkg/scripts"
+    create_script_wrapper "prerm"    "$PKG_NAME" "$WD/control/prerm"    "$WD/pkg/scripts"
+    create_script_wrapper "postrm"   "$PKG_NAME" "$WD/control/postrm"   "$WD/pkg/scripts"
+    [ -f "$WD/control/conffiles" ] && cp "$WD/control/conffiles" "$WD/pkg/control/conffiles"
+
+    if [ -d "$WD/pkg/files/opt" ]; then
+        while IFS= read -r bin; do
+            local bn; bn="$(basename "$bin")"
+            case "$bn" in *.so|*.so.*|*.a|*.la|*.pc|*.txt|*.json|*.xml|*.conf) continue ;; esac
+            local ubp="$WD/pkg/files/usr/bin/$bn"
+            if [ ! -e "$ubp" ] && [ ! -L "$ubp" ]; then
+                mkdir -p "$WD/pkg/files/usr/bin"
+                ln -sf "${bin#$WD/pkg/files}" "$ubp"
+            fi
+        done < <(find "$WD/pkg/files/opt" -maxdepth 4 -type f -executable 2>/dev/null || true)
+    fi
+
+    local IS DH; IS="$(du -sb "$WD/pkg/files" 2>/dev/null | cut -f1 || echo 0)"
+    DH="$(sha256sum "$DEB_FILE" | cut -d' ' -f1)"
+    local PROT="false"; [ "$FINAL_CLASS" = "tool" ] && PROT="true"
+    local ST="deb-import"; case "$FINAL_CLASS" in base) ST="debian-dependency" ;; tool) ST="native" ;; esac
+
+    export META_NAME="$PKG_NAME" META_VERSION="$PKG_VERSION" META_ARCH="$PKG_ARCH"
+    export META_DESC="$PKG_DESC" META_MAINTAINER="$PKG_MAINTAINER" META_SECTION="$PKG_SECTION"
+    export META_PRIORITY="$PKG_PRIORITY" META_HOMEPAGE="$PKG_HOMEPAGE" META_CLASS="$FINAL_CLASS"
+    export META_MANAGED_BY="nux" META_INSTALLED_SIZE="$IS" META_SIZE="$DEB_SIZE"
+    export META_SOURCE_SHA256="$DH" META_SOURCE_TYPE="$ST" META_PROTECTED="$PROT"
+    export META_MAKER_VERSION="$MAKER_VERSION" META_BUILT_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    export META_DEPENDS_JSON="$DJ" META_PRE_DEPENDS_JSON="$PJ" META_RECOMMENDS_JSON="$RJ"
+    export META_SUGGESTS_JSON="$SJ" META_CONFLICTS_JSON="$CJ" META_PROVIDES_JSON="$PVJ"
+
+    generate_metadata "$WD/pkg/metadata.json"
+
+    echo -e "  ${Y}[5/5]${RE} $(t build.packing)"
+    local OF="${PKG_NAME}_${PKG_VERSION}_${PKG_ARCH}.nux"
+    export XZ_OPT="${XZ_OPT:--T0 -3}"
+    tar --create --xz --preserve-permissions --file "$PACKAGES_DIR/$OF" \
+        -C "$WD/pkg" metadata.json files scripts control 2>/dev/null
+
+    local NH; NH="$(sha256sum "$PACKAGES_DIR/$OF" | cut -d' ' -f1)"
+    echo -e "  ${G}$(t build.done):${RE} $OF ${DIM}[$FINAL_CLASS]${RE}"
+    echo "    sha256: $NH"
+    log_ok "BUILD: $OF [class=$FINAL_CLASS, managed_by=nux]"
+    rm -rf "$WD"
+    return 0
+}
+
+# ══════════════════════════════════════════════════════════════════
+# DEPENDENCY RESOLUTION
+# ══════════════════════════════════════════════════════════════════
+
+resolve_deps() {
+    local pkg_name="$1"
+    echo -e "${C}[dep-resolver]${RE} $(t build.deps_resolving) $pkg_name"
+    debian_update || return 1
+
+    local all_deps; all_deps="$(debian_depends_recursive "$pkg_name")"
+    if [ -z "$all_deps" ]; then
+        echo -e "${Y}$(t build.deps_none)${RE}"
+        return 0
+    fi
+
+    local DDW; DDW="$(mktemp -d /tmp/nux_deps_XXXXXX)"; register_temp "$DDW"
+    local total=0 skipped=0 downloaded=0 failed=0
+    local dc cur=0; dc="$(printf '%s\n' "$all_deps" | sed '/^$/d' | wc -l)"
+
+    echo -e "${C}$(t build.deps_checking) ($dc)...${RE}"
+
+    while IFS= read -r dep; do
+        [ -z "$dep" ] && continue
+        total=$((total + 1)); cur=$((cur + 1))
+        progress_bar "$cur" "$dc" "Deps"
+        if already_in_repo "$dep"; then skipped=$((skipped + 1)); continue; fi
+        if debian_download "$dep" "$DDW" 2>/dev/null; then
+            downloaded=$((downloaded + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done <<< "$all_deps"
+
+    echo ""
+    echo -e "${C}Total=$total | Repo=$skipped | Downloaded=$downloaded | Failed=$failed${RE}"
+
+    local dd=("$DDW"/*.deb)
+    if [ ${#dd[@]} -gt 0 ]; then
+        echo -e "${C}$(t build.deps_converting) ${Y}[class=base]${RE}..."
+        for df in "${dd[@]}"; do
+            [ -f "$df" ] || continue
+            build_one "$df" "base" || log_error "Dep build failed: $df"
+        done
+    else
+        echo -e "${Y}$(t build.deps_nonew)${RE}"
+    fi
+    rm -rf "$DDW"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# INDEX REBUILD
+# ══════════════════════════════════════════════════════════════════
+
+index_rebuild() {
+    echo -e "${C}$(t index.rebuilding)${RE}"
+
+    python3 - "$PACKAGES_DIR" "$REPO_ROOT/index.json" "$CACHE_DIR/metadata_cache.json" "$MAKER_VERSION" <<'PYINDEX'
+import json, os, sys, tarfile, time, hashlib
+from datetime import datetime
+
+packages_dir = sys.argv[1]
+index_file   = sys.argv[2]
+cache_file   = sys.argv[3]
+maker_ver    = sys.argv[4]
+
+cache = {}
+if os.path.exists(cache_file):
+    try:
+        with open(cache_file) as f:
+            cache = json.load(f)
+    except Exception:
+        cache = {}
+
+files = sorted(f for f in os.listdir(packages_dir) if f.endswith(".nux"))
+
+new_cache = {}
+packages = {}
+total_versions = 0
+cache_hits = cache_misses = errors = 0
+
+for fn in files:
+    path = os.path.join(packages_dir, fn)
+    try:
+        st = os.stat(path)
+    except OSError:
+        errors += 1
+        continue
+
+    cache_key = f"{fn}:{st.st_size}:{int(st.st_mtime)}"
+
+    if fn in cache and cache[fn].get("_cache_key") == cache_key:
+        meta = cache[fn]
+        cache_hits += 1
+    else:
+        try:
+            with tarfile.open(path, "r:*") as tar:
+                m = tar.getmember("metadata.json")
+                fo = tar.extractfile(m)
+                meta = json.load(fo) if fo else {}
+        except Exception:
+            errors += 1
+            continue
+        meta["_cache_key"] = cache_key
+        meta["_filename"] = fn
+        meta["_file_size"] = st.st_size
+        cache_misses += 1
+
+    new_cache[fn] = meta
+
+    name = meta.get("name", "")
+    version = meta.get("version", "")
+    if not name or not version:
+        continue
+
+    # sha256
+    sha = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1048576), b""):
+            sha.update(chunk)
+
+    ver_info = {k: v for k, v in meta.items() if not k.startswith("_")}
+    ver_info["filename"] = f"packages/{fn}"
+    ver_info["sha256"] = sha.hexdigest()
+    ver_info["size"] = st.st_size
+
+    if name not in packages:
+        packages[name] = {"latest": version, "versions": {}}
+    packages[name]["versions"][version] = ver_info
+    packages[name]["latest"] = version
+    total_versions += 1
+
+# Cache kaydet
+try:
+    with open(cache_file, "w") as f:
+        json.dump(new_cache, f, separators=(",", ":"), ensure_ascii=False)
+except Exception:
+    pass
+
+# Index oluştur
+index = {
+    "generated_at": datetime.utcnow().isoformat() + "Z",
+    "generator": f"nux-maker/{maker_ver}",
+    "package_count": len(packages),
+    "version_count": total_versions,
+    "packages": packages,
+}
+
+with open(index_file, "w", encoding="utf-8") as f:
+    json.dump(index, f, indent=2, ensure_ascii=False)
+
+print(f"[OK] index.json — {len(packages)} packages, {total_versions} versions")
+print(f"[OK] Cache: {cache_hits} hit, {cache_misses} miss, {errors} errors")
+PYINDEX
+}
+
+index_info() {
+    if [ ! -f "$REPO_ROOT/index.json" ]; then
+        echo -e "${R}index.json not found${RE}"
+        return 1
+    fi
+
+    python3 - "$REPO_ROOT/index.json" "$LANG_CURRENT" <<'PYINFO'
+import json, sys, os
+with open(sys.argv[1]) as f:
+    idx = json.load(f)
+lang = sys.argv[2]
+
+pkgs = idx.get("packages", {})
+cc = {"app": 0, "base": 0, "tool": 0}
+for name, pdata in pkgs.items():
+    latest = pdata.get("latest", "")
+    if latest and latest in pdata.get("versions", {}):
+        cls = pdata["versions"][latest].get("class", "app")
+        cc[cls] = cc.get(cls, 0) + 1
+
+sz = os.path.getsize(sys.argv[1])
+
+title = "REPO INDEX BİLGİSİ" if lang == "tr" else "REPO INDEX INFO"
+print(f"\n╔{'═'*50}╗")
+print(f"║  {title:<48}║")
+print(f"╠{'═'*50}╣")
+print(f"║  {'Toplam paket' if lang=='tr' else 'Total packages':<20}: {idx.get('package_count',0):<26}║")
+print(f"║  {'App':<20}: {cc.get('app',0):<26}║")
+print(f"║  {'Base':<20}: {cc.get('base',0):<26}║")
+print(f"║  {'Tool':<20}: {cc.get('tool',0):<26}║")
+print(f"║  {'Boyut' if lang=='tr' else 'Size':<20}: {sz} bytes{' '*(20-len(str(sz)))}║")
+print(f"║  {'Tarih' if lang=='tr' else 'Date':<20}: {idx.get('generated_at','?')[:19]:<26}║")
+print(f"╚{'═'*50}╝\n")
+PYINFO
+}
+
+index_verify() {
+    echo -e "${C}$(t index.verify_title)${RE}"
+    python3 - "$REPO_ROOT/index.json" "$PACKAGES_DIR" <<'PYVERIFY'
+import json, sys, os, hashlib
+with open(sys.argv[1]) as f:
+    idx = json.load(f)
+pkgs_dir = sys.argv[2]
+ok = missing = mismatch = 0
+for name, pdata in idx.get("packages", {}).items():
+    for ver, info in pdata.get("versions", {}).items():
+        fn = info.get("filename", "")
+        if fn.startswith("packages/"):
+            fn = fn[len("packages/"):]
+        path = os.path.join(pkgs_dir, fn)
+        if not os.path.exists(path):
+            print(f"  ✗ MISSING: {name} {ver} → {fn}")
+            missing += 1
+            continue
+        expected = info.get("sha256", "")
+        if expected:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1048576), b""):
+                    h.update(chunk)
+            if h.hexdigest() != expected:
+                print(f"  ✗ MISMATCH: {name} {ver}")
+                mismatch += 1
+                continue
+        ok += 1
+print(f"\n  ✓ OK: {ok} | ✗ Missing: {missing} | ✗ Mismatch: {mismatch}")
+PYVERIFY
+}
+
+# ══════════════════════════════════════════════════════════════════
+# REPO STATS / AUDIT / REPAIR
+# ══════════════════════════════════════════════════════════════════
+
+repo_stats() {
+    cache_init
+    python3 - "$PACKAGES_DIR" "$CACHE_DB" "$LANG_CURRENT" <<'PYSTATS'
+import json, os, sys, tarfile
+from collections import Counter
+packages_dir = sys.argv[1]
+cache_file = sys.argv[2]
+lang = sys.argv[3]
+cache = {}
+if os.path.exists(cache_file):
+    try:
+        with open(cache_file) as f: cache = json.load(f)
+    except: cache = {}
+files = sorted(f for f in os.listdir(packages_dir) if f.endswith(".nux"))
+cc = Counter()
+total_size = 0
+for fn in files:
+    path = os.path.join(packages_dir, fn)
+    meta = None
+    if fn in cache and cache[fn].get("name"):
+        meta = cache[fn]
+    else:
+        try:
+            with tarfile.open(path, "r:*") as tar:
+                m = tar.getmember("metadata.json")
+                fo = tar.extractfile(m)
+                if fo: meta = json.load(fo)
+        except: continue
+    if not meta: continue
+    cc[meta.get("class","app")] += 1
+    total_size += os.path.getsize(path)
+def hs(n):
+    for u in ["B","KB","MB","GB"]:
+        if n < 1024: return f"{n:.1f} {u}"
+        n /= 1024
+    return f"{n:.1f} TB"
+title = "REPO İSTATİSTİKLERİ" if lang == "tr" else "REPO STATISTICS"
+print(f"\n╔{'═'*50}╗")
+print(f"║  {title:<48}║")
+print(f"╠{'═'*50}╣")
+print(f"║  {'Toplam' if lang=='tr' else 'Total':<20}: {len(files):<26}║")
+print(f"║  App{' '*16}: {cc.get('app',0):<26}║")
+print(f"║  Base{' '*15}: {cc.get('base',0):<26}║")
+print(f"║  Tool{' '*15}: {cc.get('tool',0):<26}║")
+print(f"║  {'Boyut' if lang=='tr' else 'Size':<20}: {hs(total_size):<26}║")
+print(f"╚{'═'*50}╝\n")
+PYSTATS
+}
+
+repo_audit() {
+    cache_init
+    echo -e "${C}$(t repo.audit_title)${RE}"
+    python3 - "$PACKAGES_DIR" "$CACHE_DB" "$LANG_CURRENT" <<'PYAUDIT'
+import json, os, sys, tarfile
+from collections import Counter
+pd = sys.argv[1]
+cf = sys.argv[2]
+lang = sys.argv[3]
+cache = {}
+if os.path.exists(cf):
+    try:
+        with open(cf) as f: cache = json.load(f)
+    except: pass
+files = sorted(f for f in os.listdir(pd) if f.endswith(".nux"))
+installed = set()
+provided = set()
+all_deps = {}
+cc = Counter()
+for fn in files:
+    meta = None
+    if fn in cache and cache[fn].get("name"): meta = cache[fn]
+    else:
+        try:
+            with tarfile.open(os.path.join(pd,fn),"r:*") as tar:
+                fo = tar.extractfile(tar.getmember("metadata.json"))
+                if fo: meta = json.load(fo)
+        except: continue
+    if not meta: continue
+    name = meta.get("name","")
+    if not name: continue
+    installed.add(name)
+    cc[meta.get("class","app")] += 1
+    deps = set()
+    for d in meta.get("depends",[]): deps.add(d)
+    for d in meta.get("pre_depends",[]): deps.add(d)
+    all_deps[name] = deps
+    for p in meta.get("provides",[]): provided.add(p)
+avail = installed | provided
+mm = {}
+for pkg, deps in all_deps.items():
+    for d in deps:
+        if d not in avail:
+            mm.setdefault(d,[]).append(pkg)
+ml = sorted(mm.keys())
+print(f"\n  {'Toplam' if lang=='tr' else 'Total'}: {len(installed)}")
+print(f"  App: {cc.get('app',0)} | Base: {cc.get('base',0)} | Tool: {cc.get('tool',0)}")
+print(f"  {'Eksik dep' if lang=='tr' else 'Missing deps'}: {len(ml)}\n")
+if not ml:
+    ok = "Tüm dependency'ler karşılanıyor." if lang=="tr" else "All dependencies satisfied."
+    print(f"  ✓ {ok}")
+else:
+    for dep in ml:
+        req = ", ".join(mm[dep][:5])
+        print(f"   - {dep:<30} <- {req}")
+    hint = "sudo nux-maker repo repair" 
+    print(f"\n  → {hint}")
+PYAUDIT
+}
+
+repo_repair() {
+    echo -e "${C}$(t repo.repair_title)${RE}"
+    debian_update || return 1
+
+    local iteration=0 ts=0 tf=0 tv=0 tsk=0
+    while [ "$iteration" -lt "$MAX_DEPTH" ]; do
+        iteration=$((iteration + 1))
+        echo -e "${C}--- Iteration $iteration / $MAX_DEPTH ---${RE}"
+
+        # Missing deps dosyasını üret
+        cache_init
+        python3 - "$PACKAGES_DIR" "$CACHE_DB" <<'PYMISSING'
+import json, os, sys, tarfile
+pd = sys.argv[1]
+cf = sys.argv[2]
+cache = {}
+if os.path.exists(cf):
+    try:
+        with open(cf) as f: cache = json.load(f)
+    except: pass
+files = sorted(f for f in os.listdir(pd) if f.endswith(".nux"))
+installed = set()
+provided = set()
+all_deps = {}
+for fn in files:
+    meta = None
+    if fn in cache and cache[fn].get("name"): meta = cache[fn]
+    else:
+        try:
+            with tarfile.open(os.path.join(pd,fn),"r:*") as tar:
+                fo = tar.extractfile(tar.getmember("metadata.json"))
+                if fo: meta = json.load(fo)
+        except: continue
+    if not meta: continue
+    name = meta.get("name","")
+    if not name: continue
+    installed.add(name)
+    deps = set()
+    for d in meta.get("depends",[]): deps.add(d)
+    for d in meta.get("pre_depends",[]): deps.add(d)
+    all_deps[name] = deps
+    for p in meta.get("provides",[]): provided.add(p)
+avail = installed | provided
+ml = sorted(d for deps in all_deps.values() for d in deps if d not in avail)
+ml = sorted(set(ml))
+mf = os.path.join(pd, ".missing_deps.txt")
+if ml:
+    with open(mf,"w") as f:
+        for d in ml: f.write(d+"\n")
+    print(len(ml))
+else:
+    try: os.remove(mf)
+    except: pass
+    print("0")
+PYMISSING
+
+        local mc
+        mc="$(python3 - "$PACKAGES_DIR" "$CACHE_DB" < /dev/null 2>/dev/null | tail -1)" || mc="0"
+
+        local MF="$PACKAGES_DIR/.missing_deps.txt"
+        [ ! -f "$MF" ] && { echo -e "${G}All deps OK${RE}"; break; }
+
+        local im; im="$(wc -l < "$MF" 2>/dev/null || echo 0)"
+        [ "$im" -eq 0 ] && { echo -e "${G}All deps OK${RE}"; break; }
+
+        echo -e "${Y}$im missing deps...${RE}"
+        local s=0 f=0 v=0 sk=0 cur=0
+        local RD; RD="$(mktemp -d /tmp/nux_repair_XXXXXX)"; register_temp "$RD"
+
+        while IFS= read -r dep; do
+            [ -z "$dep" ] && continue
+            cur=$((cur + 1))
+            progress_bar "$cur" "$im" "Repair[$iteration]"
+
+            already_in_repo "$dep" && { sk=$((sk+1)); continue; }
+            if ! debian_pkg_exists "$dep"; then v=$((v+1)); continue; fi
+
+            rm -f "$RD"/*.deb 2>/dev/null || true
+            if debian_download "$dep" "$RD" 2>/dev/null; then
+                local ba=0
+                for df in "$RD"/*.deb; do
+                    [ -f "$df" ] && build_one "$df" "base" && ba=1
+                done
+                [ "$ba" -eq 1 ] && s=$((s+1)) || f=$((f+1))
+            else
+                f=$((f+1))
+            fi
+        done < "$MF"
+
+        rm -rf "$RD" "$MF"
+        ts=$((ts+s)); tf=$((tf+f)); tv=$((tv+v)); tsk=$((tsk+sk))
+        echo ""
+        echo -e "  +$s | x$f | ~$v | =$sk"
+        [ "$s" -eq 0 ] && break
+    done
+
+    echo -e "\n  ${G}OK:${RE} $ts | ${R}Fail:${RE} $tf | ${Y}Virtual:${RE} $tv | ${DIM}Skip:${RE} $tsk"
+    index_rebuild
+}
+
+repo_clean() {
+    echo -e "${C}$(t repo.clean_title)${RE}"
+    rm -f "$CACHE_DB"
+    printf '{}' > "$CACHE_DB"
+    echo -e "${G}✓ Cache cleaned${RE}"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# CLASSIFY
+# ══════════════════════════════════════════════════════════════════
+
+run_classify() {
+    local target="${1:---all}"
+    echo -e "${C}$(t classify.title)${RE}"
+
+    python3 - "$PACKAGES_DIR" "$target" <<'PYCLASS'
+import json, os, sys, tarfile, tempfile, shutil, re
+pd = sys.argv[1]
+target = sys.argv[2]
+
+TOOL_PKG = {"nux"}
+TOOL_PFX = ("nucora-",)
+BASE_SEC = {"libs","libdevel","oldlibs","debug","base","perl","python","x11","fonts","devel"}
+BASE_PRI = {"required","important"}
+BASE_PAT = [re.compile(p) for p in [
+    r"^lib[a-z]", r"^gir1\.2-", r"^gpg", r"^dbus", r"^ibus", r"^x11-", r"^xfonts-",
+    r"^xbitmaps", r"^xdg-", r"^xkb-", r"^fonts-", r"^fontconfig", r"^openssl",
+    r"^ca-certificates", r"^perl", r"^python3", r"^default-jre", r"^openjdk-",
+    r"^mesa-", r"^systemd", r"^sysvinit", r"^udev", r"^eudev", r"^passwd",
+    r"^adduser", r"^base-files", r"^base-passwd", r"^coreutils", r"^util-linux",
+    r"^bash$", r"^dash$", r"^tar$", r"^gzip$", r"^bzip2", r"^xz-utils", r"^zlib",
+    r"^sed$", r"^grep$", r"^gawk$", r"^mawk$", r"^findutils", r"^diffutils",
+    r"^debconf", r"^dpkg", r"^apt$", r"^apt-", r"^sensible-utils", r"^debianutils",
+    r"^hostname$", r"^ncurses-", r"^init$", r"^init-", r"^lsb-base", r"^netbase",
+    r"^procps", r"^mount$", r"^shared-mime-info", r"^hicolor-icon-theme",
+    r"^adwaita-icon-theme", r"^at-spi2-", r"^iso-codes", r"^media-types",
+    r"^readline-common", r"^ucf$", r"^unzip$", r"^wget$", r"^dconf-",
+    r"^gsettings-desktop-schemas", r"^gtk-update-icon-cache", r"^poppler-data",
+    r"^timgm6mb-soundfont", r"^login"
+]]
+
+def classify(name, meta):
+    if name in TOOL_PKG: return "tool"
+    for p in TOOL_PFX:
+        if name.startswith(p): return "tool"
+    if str(meta.get("essential","")).lower() == "yes": return "base"
+    if meta.get("priority","").lower() in BASE_PRI: return "base"
+    if meta.get("section","").lower() in BASE_SEC: return "base"
+    for pat in BASE_PAT:
+        if pat.match(name): return "base"
+    return "app"
+
+files = sorted(f for f in os.listdir(pd) if f.endswith(".nux"))
+if not files:
+    print("  No packages."); sys.exit(0)
+
+CC = {"app":"\033[1;32m","base":"\033[1;33m","tool":"\033[1;35m"}
+RS = "\033[0m"
+updated = skipped = errors = 0
+
+for i, fn in enumerate(files, 1):
+    fp = os.path.join(pd, fn)
+    try:
+        with tarfile.open(fp, "r:*") as tar:
+            m = tar.getmember("metadata.json")
+            fo = tar.extractfile(m)
+            meta = json.load(fo) if fo else {}
+            names = tar.getnames()
+        name = meta.get("name","")
+        if not name: errors += 1; continue
+        old = meta.get("class","")
+        new = classify(name, meta)
+        if old == new: skipped += 1; continue
+        meta["class"] = new
+        meta["managed_by"] = "nux"
+        if new == "tool": meta["protected"] = True
+        meta["nux_format_version"] = "4.5"
+        if new == "base": meta["source_type"] = "debian-dependency"
+        elif new == "tool": meta["source_type"] = "native"
+        elif "source_type" not in meta: meta["source_type"] = "deb-import"
+        td = tempfile.mkdtemp(prefix="nux_cls_")
+        with tarfile.open(fp, "r:*") as tar: tar.extractall(td)
+        with open(os.path.join(td,"metadata.json"),"w") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        tmp = fp + ".tmp"
+        with tarfile.open(tmp, "w:xz") as tar:
+            for n in names:
+                p = os.path.join(td, n)
+                if os.path.exists(p) or os.path.islink(p):
+                    tar.add(p, arcname=n)
+        os.replace(tmp, fp)
+        shutil.rmtree(td, ignore_errors=True)
+        c = CC.get(new,"")
+        o = old if old else "none"
+        print(f"  [{i}/{len(files)}] {name:<35} {o:>6} → {c}{new}{RS}")
+        updated += 1
+    except Exception as e:
+        print(f"  [{i}/{len(files)}] {fn}: ERROR: {e}")
+        errors += 1
+
+print(f"\n  Updated: {updated} | Skipped: {skipped} | Errors: {errors}")
+PYCLASS
+
+    rm -f "$CACHE_DB"
+    printf '{}' > "$CACHE_DB"
+    index_rebuild
+}
+
+# ══════════════════════════════════════════════════════════════════
+# NGINX YÖNETİMİ
+# ══════════════════════════════════════════════════════════════════
+
+nginx_status() {
+    local domain port ssl_type
+    domain="$(cfg web.domain "unknown")"
+    port="$(cfg web.port "80")"
+    ssl_type="$(cfg web.ssl_type "none")"
+
+    local running="false" config_ok="false"
+    systemctl is-active nginx >/dev/null 2>&1 && running="true"
+    nginx -t >/dev/null 2>&1 && config_ok="true"
+
+    local run_icon run_text cfg_icon cfg_text
+    if [ "$running" = "true" ]; then
+        run_icon="${G}✅${RE}"; run_text="${G}$(t nginx.running)${RE}"
+    else
+        run_icon="${R}❌${RE}"; run_text="${R}$(t nginx.stopped)${RE}"
+    fi
+    if [ "$config_ok" = "true" ]; then
+        cfg_icon="${G}✅${RE}"; cfg_text="${G}$(t nginx.config_ok)${RE}"
+    else
+        cfg_icon="${R}❌${RE}"; cfg_text="${R}$(t nginx.config_err)${RE}"
+    fi
+
+    echo -e "\n╔══════════════════════════════════════════╗"
+    echo -e "║  $(t nginx.status_title)"
+    echo -e "╠══════════════════════════════════════════╣"
+    echo -e "║  Status  : $run_icon $run_text"
+    echo -e "║  Config  : $cfg_icon $cfg_text"
+    echo -e "║  Domain  : $domain"
+    echo -e "║  Port    : $port"
+    echo -e "║  SSL     : $ssl_type"
+    echo -e "║  Root    : $REPO_ROOT"
+    echo -e "╚══════════════════════════════════════════╝\n"
+}
+
+nginx_test() {
+    echo -e "  ⠋ $(t nginx.testing)"
+    nginx -t 2>&1 | while IFS= read -r line; do echo "    $line"; done
+    echo ""
+
+    local url
+    url="$(cfg web.protocol "http")://$(cfg web.domain "localhost")/index.json"
+    echo -e "  ⠋ $(t nginx.repo_testing)"
+    local code
+    code="$(curl -sI -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")"
+    if [ "$code" = "200" ]; then
+        echo -e "  ${G}✅${RE} $url → $code"
+    else
+        echo -e "  ${R}❌${RE} $url → $code"
+    fi
+    echo ""
+}
+
+nginx_restart() {
+    systemctl restart nginx 2>/dev/null && echo -e "${G}✓ Nginx restarted${RE}" || echo -e "${R}Nginx restart failed${RE}"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════════════════
+
+config_show() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${R}Config not found. Run: sudo nux-maker setup${RE}"
+        return 1
+    fi
+    echo -e "\n${C}$(t config.show_title)${RE}\n"
+    python3 -m json.tool "$CONFIG_FILE"
+    echo ""
+}
+
+config_edit() {
+    local editor="${EDITOR:-nano}"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${R}Config not found. Run: sudo nux-maker setup${RE}"
+        return 1
+    fi
+    "$editor" "$CONFIG_FILE"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# UBUNTU SCAN/PURGE
+# ══════════════════════════════════════════════════════════════════
+
+scan_ubuntu() {
+    cache_init
+    python3 - "$PACKAGES_DIR" "$CACHE_DB" "scan" <<'PYUBU'
+import json, os, sys, tarfile
+pd,cf,mode = sys.argv[1],sys.argv[2],sys.argv[3]
+cache = {}
+if os.path.exists(cf):
+    try:
+        with open(cf) as f: cache = json.load(f)
+    except: pass
+files = sorted(f for f in os.listdir(pd) if f.endswith(".nux"))
+ubu = []
+for fn in files:
+    meta = None
+    if fn in cache and cache[fn].get("name"): meta = cache[fn]
+    else:
+        try:
+            with tarfile.open(os.path.join(pd,fn),"r:*") as tar:
+                fo = tar.extractfile(tar.getmember("metadata.json"))
+                if fo: meta = json.load(fo)
+        except: continue
+    if not meta: continue
+    reasons = []
+    if "ubuntu" in meta.get("version","").lower(): reasons.append("version")
+    m = meta.get("maintainer","").lower()
+    if "ubuntu" in m or "canonical" in m: reasons.append("maintainer")
+    if reasons:
+        ubu.append({"name":meta.get("name",""),"filename":fn,"reasons":reasons,
+                     "class":meta.get("class","app")})
+print(f"  Total: {len(files)} | Ubuntu: {len(ubu)}")
+if ubu:
+    for p in sorted(ubu, key=lambda x:x["name"]):
+        prot = " [PROTECTED]" if p["class"]=="tool" else ""
+        print(f"  {p['name']:<30} [{p['class']}]{prot} ({', '.join(p['reasons'])})")
+if mode == "purge":
+    d = [p for p in ubu if p["class"] != "tool"]
+    for p in d:
+        try:
+            os.remove(os.path.join(pd,p["filename"]))
+            print(f"  DELETED: {p['filename']}")
+        except: pass
+    print(f"  Deleted: {len(d)}")
+elif ubu:
+    print("  To purge: nux-maker purge-ubuntu")
+PYUBU
+}
+
+purge_ubuntu() {
+    cache_init
+    python3 - "$PACKAGES_DIR" "$CACHE_DB" "purge" <<'PYUBU2'
+import json, os, sys, tarfile
+pd,cf,mode = sys.argv[1],sys.argv[2],sys.argv[3]
+cache = {}
+if os.path.exists(cf):
+    try:
+        with open(cf) as f: cache = json.load(f)
+    except: pass
+files = sorted(f for f in os.listdir(pd) if f.endswith(".nux"))
+ubu = []
+for fn in files:
+    meta = None
+    if fn in cache and cache[fn].get("name"): meta = cache[fn]
+    else:
+        try:
+            with tarfile.open(os.path.join(pd,fn),"r:*") as tar:
+                fo = tar.extractfile(tar.getmember("metadata.json"))
+                if fo: meta = json.load(fo)
+        except: continue
+    if not meta: continue
+    reasons = []
+    if "ubuntu" in meta.get("version","").lower(): reasons.append("version")
+    m = meta.get("maintainer","").lower()
+    if "ubuntu" in m or "canonical" in m: reasons.append("maintainer")
+    if reasons:
+        ubu.append({"name":meta.get("name",""),"filename":fn,"class":meta.get("class","app")})
+d = [p for p in ubu if p["class"] != "tool"]
+for p in d:
+    try:
+        os.remove(os.path.join(pd,p["filename"]))
+        print(f"  DELETED: {p['filename']}")
+    except: pass
+print(f"\n  Deleted: {len(d)} | Protected: {len(ubu)-len(d)}")
+PYUBU2
+    rm -f "$CACHE_DB"; printf '{}' > "$CACHE_DB"
+    index_rebuild
+}
+
+# ══════════════════════════════════════════════════════════════════
+# HELP
+# ══════════════════════════════════════════════════════════════════
+
+show_help() {
+    echo -e "${C}"
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║  nux-maker v${MAKER_VERSION} — Nux Repo Management Tool  "
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo -e "${RE}"
+    echo -e "${G}Setup:${RE}"
+    echo "  nux-maker setup                  Interactive setup wizard"
+    echo ""
+    echo -e "${G}Build:${RE}"
+    echo "  nux-maker build <file.deb>       Build single package"
+    echo "  nux-maker build --with-deps <f>  Build with dependencies"
+    echo "  nux-maker build --with-deps <n>  Build from Debian repos"
+    echo ""
+    echo -e "${G}Index:${RE}"
+    echo "  nux-maker index rebuild          Rebuild repository index"
+    echo "  nux-maker index info             Show index information"
+    echo "  nux-maker index verify           Verify index integrity"
+    echo ""
+    echo -e "${G}Repository:${RE}"
+    echo "  nux-maker repo stats             Repository statistics"
+    echo "  nux-maker repo audit             Dependency audit"
+    echo "  nux-maker repo repair            Fix missing dependencies"
+    echo "  nux-maker repo clean             Clean cache"
+    echo ""
+    echo -e "${G}Classification:${RE}"
+    echo "  nux-maker classify --all         Reclassify all packages"
+    echo ""
+    echo -e "${G}Nginx:${RE}"
+    echo "  nux-maker nginx status           Show Nginx status"
+    echo "  nux-maker nginx test             Test Nginx + repo access"
+    echo "  nux-maker nginx restart          Restart Nginx"
+    echo ""
+    echo -e "${G}Ubuntu:${RE}"
+    echo "  nux-maker scan-ubuntu            Scan Ubuntu packages"
+    echo "  nux-maker purge-ubuntu           Remove Ubuntu packages"
+    echo ""
+    echo -e "${G}Config:${RE}"
+    echo "  nux-maker config show            Show configuration"
+    echo "  nux-maker config edit            Edit configuration"
+    echo ""
+    echo -e "${G}Options:${RE}"
+    echo "  --with-deps      Resolve dependencies"
+    echo "  --class CLASS    Force class (app/base/tool)"
+    echo "  --no-update      Skip index update"
+    echo "  --dry-run        Simulate only"
+    echo "  --clear-cache    Clear metadata cache"
+    echo "  --max-depth N    Repair iteration limit"
+    echo "  --keep-all-deps  Disable dependency ignore list"
+    echo ""
+    echo -e "${DIM}$(t about.dev)${RE}"
+    echo -e "${DIM}$(t about.by)${RE}"
+    echo -e "${DIM}$(t about.motto)${RE}"
+    echo ""
+}
+
+# ══════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════
+
+# Config varsa repo dizinlerini oluştur
+if [ -f "$CONFIG_FILE" ]; then
+    mkdir -p "$PACKAGES_DIR" "$CACHE_DIR" "$LOG_DIR" 2>/dev/null || true
+fi
+
+# Argüman yoksa help
+if [ $# -eq 0 ]; then
+    show_help
+    exit 0
+fi
+
+CMD="$1"; shift
+
+case "$CMD" in
+    setup)
+        run_setup
+        ;;
+
+    build)
+        # Config kontrolü
+        if [ ! -f "$CONFIG_FILE" ]; then
+            echo -e "${R}Config not found. Run: sudo nux-maker setup${RE}"
+            exit 1
+        fi
+
+        # Argümanları parse et
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --with-deps)    WITH_DEPS=1 ;;
+                --no-update)    NO_UPDATE=1 ;;
+                --dry-run)      DRY_RUN=1 ;;
+                --clear-cache)  CLEAR_CACHE=1 ;;
+                --keep-all-deps) KEEP_ALL_DEPS=1 ;;
+                --class)
+                    shift
+                    [[ "$1" =~ ^(app|base|tool)$ ]] || { echo -e "${R}Invalid class${RE}"; exit 1; }
+                    FORCE_CLASS="$1"
+                    ;;
+                --max-depth)
+                    shift
+                    MAX_DEPTH="$1"
+                    ;;
+                *.deb) DEB_FILES+=("$1") ;;
+                *) PKG_NAMES+=("$1") ;;
+            esac
+            shift
+        done
+
+        cache_init
+        FAIL=0
+
+        # Paket adı ile
+        if [ ${#PKG_NAMES[@]} -gt 0 ]; then
+            [ "$WITH_DEPS" -eq 0 ] && { echo -e "${R}--with-deps required for package names${RE}"; exit 1; }
+            debian_update || exit 1
+            for pn in "${PKG_NAMES[@]}"; do
+                echo -e "${C}[apt-mode]${RE} $pn..."
+                if already_in_repo "$pn"; then
+                    echo -e "${G}[=]${RE} $pn already in repo"
+                else
+                    MD="$(mktemp -d /tmp/nux_main_XXXXXX)"; register_temp "$MD"
+                    if debian_download "$pn" "$MD" 2>/dev/null; then
+                        for deb in "$MD"/*.deb; do
+                            [ -f "$deb" ] && {
+                                local mc; mc="$(determine_class "$pn" "app")"
+                                build_one "$deb" "$mc" || FAIL=1
+                            }
+                        done
+                    else
+                        echo -e "${R}Download failed: $pn${RE}"; FAIL=1
+                    fi
+                    rm -rf "$MD"
+                fi
+                [ "$WITH_DEPS" -eq 1 ] && { resolve_deps "$pn" || FAIL=1; }
+            done
+        fi
+
+        # .deb dosyası ile
+        if [ ${#DEB_FILES[@]} -gt 0 ]; then
+            for deb in "${DEB_FILES[@]}"; do
+                local dpn; dpn="$(dpkg-deb -f "$deb" Package 2>/dev/null || true)"
+                local dc; dc="$(determine_class "${dpn:-unknown}" "app")"
+                build_one "$deb" "$dc" || FAIL=1
+                [ "$WITH_DEPS" -eq 1 ] && [ -n "$dpn" ] && { resolve_deps "$dpn" || true; }
+            done
+        fi
+
+        [ "$NO_UPDATE" -eq 0 ] && index_rebuild
+        exit "$FAIL"
+        ;;
+
+    index)
+        [ ! -f "$CONFIG_FILE" ] && { echo -e "${R}Run setup first${RE}"; exit 1; }
+        case "${1:-}" in
+            rebuild) cache_init; index_rebuild ;;
+            info)    index_info ;;
+            verify)  index_verify ;;
+            *)       echo "Usage: nux-maker index rebuild|info|verify" ;;
+        esac
+        ;;
+
+    repo)
+        [ ! -f "$CONFIG_FILE" ] && { echo -e "${R}Run setup first${RE}"; exit 1; }
+        case "${1:-}" in
+            stats)  repo_stats ;;
+            audit)  repo_audit ;;
+            repair) repo_repair ;;
+            clean)  repo_clean ;;
+            *)      echo "Usage: nux-maker repo stats|audit|repair|clean" ;;
+        esac
+        ;;
+
+    classify)
+        [ ! -f "$CONFIG_FILE" ] && { echo -e "${R}Run setup first${RE}"; exit 1; }
+        run_classify "${1:---all}"
+        ;;
+
+    nginx)
+        case "${1:-}" in
+            status)  nginx_status ;;
+            test)    nginx_test ;;
+            restart) nginx_restart ;;
+            *)       echo "Usage: nux-maker nginx status|test|restart" ;;
+        esac
+        ;;
+
+    scan-ubuntu)
+        [ ! -f "$CONFIG_FILE" ] && { echo -e "${R}Run setup first${RE}"; exit 1; }
+        scan_ubuntu
+        ;;
+
+    purge-ubuntu)
+        [ ! -f "$CONFIG_FILE" ] && { echo -e "${R}Run setup first${RE}"; exit 1; }
+        purge_ubuntu
+        ;;
+
+    config)
+        case "${1:-}" in
+            show) config_show ;;
+            edit) config_edit ;;
+            *)    echo "Usage: nux-maker config show|edit" ;;
+        esac
+        ;;
+
+    help|--help|-h)
+        show_help
+        ;;
+
+    version|--version)
+        echo "nux-maker v${MAKER_VERSION}"
+        ;;
+
+    *)
+        echo -e "${R}Unknown command: $CMD${RE}"
+        echo "Run: nux-maker help"
+        exit 1
+        ;;
+esac
